@@ -1,0 +1,30 @@
+name: H200 Video Experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: "Experiment config path"
+        required: true
+        default: "configs/h200_3h.yaml"
+      smoke:
+        description: "Run smoke test instead of full H200 experiment"
+        required: true
+        default: "false"
+
+jobs:
+  run:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        run: bash scripts/setup.sh
+      - name: Smoke
+        if: ${{ inputs.smoke == 'true' }}
+        run: bash scripts/run_smoke.sh
+      - name: H200 experiment
+        if: ${{ inputs.smoke != 'true' }}
+        env:
+          CONFIG: ${{ inputs.config }}
+          REQUIRE_OFFICIAL_VBENCH: "0"
+        run: bash scripts/run_h200_3h.sh

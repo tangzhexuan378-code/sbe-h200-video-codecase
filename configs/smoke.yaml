@@ -1,0 +1,56 @@
+experiment:
+  name: smoke
+  seed_idx: 1
+  split: heldout
+  max_prompts: 4
+  time_budget_hours: 0.20
+  save_videos: true
+  save_sample_frames: true
+  sample_frame_count: 3
+
+model:
+  model_id: Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+  local_files_only: false
+  torch_dtype: bfloat16
+
+generation:
+  height: 192
+  width: 320
+  num_frames: 33
+  fps: 8
+  steps: 12
+  guidance_scale: 6.0
+
+methods:
+  - baseline_12step
+  - teacache_12step_t0.2
+  - fastercache_s2
+  - sbe_riskgate_v5
+
+optional_methods:
+  include_pab: false
+  pab_max_prompts: 2
+
+evaluation:
+  try_official_vbench: false
+  try_lpips: false
+  compute_ssim_psnr: true
+  official_vbench_json: ""
+
+sbe_riskgate_v5:
+  preserve_original_prompt: true
+  policy:
+    object attribute: {action: teacache, threshold: 0.45, steps: 12}
+    containment: {action: teacache, threshold: 0.20, steps: 12}
+    object presence: {action: teacache, threshold: 0.30, steps: 12}
+    spatial relation: {action: nocache, steps: 12}
+    object state: {action: nocache, steps: 12}
+    counting: {action: nocache, steps: 12}
+
+report:
+  title: "Smoke Table"
+  table_methods:
+    - baseline_12step
+    - teacache_12step_t0.2
+    - fastercache_s2
+    - sbe_riskgate_v5

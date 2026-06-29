@@ -1,0 +1,8 @@
+outputs/
+*.mp4
+*.pt
+*.safetensors
+__pycache__/
+.venv/
+.env
+*.log

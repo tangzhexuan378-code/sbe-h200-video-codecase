@@ -1,0 +1,79 @@
+experiment:
+  name: h200_v5_3h
+  seed_idx: 23
+  split: heldout
+  max_prompts: 80
+  time_budget_hours: 3.0
+  save_videos: true
+  save_sample_frames: true
+  sample_frame_count: 9
+
+model:
+  # Use a local path if the H200 server already has the model.
+  model_id: Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+  local_files_only: false
+  torch_dtype: bfloat16
+
+generation:
+  height: 480
+  width: 832
+  num_frames: 129
+  fps: 8
+  steps: 12
+  guidance_scale: 6.0
+
+methods:
+  - baseline_12step
+  - teacache_12step_t0.2
+  - teacache_12step_t0.45
+  - fastercache_s2
+  - sbe_riskgate_v5
+  - uniform_teacache_t0.3
+
+optional_methods:
+  # PAB was weak in the 5090 pilot. Keep it optional to preserve the 3h budget.
+  include_pab: false
+  pab_max_prompts: 30
+
+evaluation:
+  # Official VBench is optional. If not installed, the runner writes proxy scores
+  # and clearly marks vbench_source=proxy.
+  try_official_vbench: true
+  try_lpips: true
+  compute_ssim_psnr: true
+  official_vbench_json: ""
+
+sbe_riskgate_v5:
+  preserve_original_prompt: true
+  policy:
+    object attribute:
+      action: teacache
+      threshold: 0.45
+      steps: 12
+    containment:
+      action: teacache
+      threshold: 0.20
+      steps: 12
+    object presence:
+      action: teacache
+      threshold: 0.30
+      steps: 12
+    spatial relation:
+      action: nocache
+      steps: 12
+    object state:
+      action: nocache
+      steps: 12
+    counting:
+      action: nocache
+      steps: 12
+
+report:
+  title: "H200 SBE-RiskGate v5 Main Table"
+  table_methods:
+    - baseline_12step
+    - teacache_12step_t0.2
+    - teacache_12step_t0.45
+    - fastercache_s2
+    - sbe_riskgate_v5
+    - uniform_teacache_t0.3

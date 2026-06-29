@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sbe-h200-video-codecase"
+version = "0.1.0"
+description = "H200-scale Wan2.1 video acceleration codecase for SBE RiskGate experiments."
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
