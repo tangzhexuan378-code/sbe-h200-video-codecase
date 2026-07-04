@@ -8,6 +8,8 @@ The goal is an AAAI-style pilot package: real video generation, fixed-cache base
 
 The code assumes the H200 node is almost empty. It checks and installs the video generation stack, spaCy, ffmpeg support, and official VBench before running the experiment.
 
+The runner also tries multiple runtime paths automatically. If the current checkout directory has little disk space or cannot be written to, it tries common H200/cloud paths such as `/root/autodl-tmp`, `/mnt/data`, `/data`, `$HOME`, and `/tmp`. The selected cache/output path is printed at startup.
+
 ## One-command H200 run
 
 ```bash
@@ -183,6 +185,28 @@ The bootstrap script handles an empty H200 node:
 | ffmpeg | uses `imageio-ffmpeg` |
 | Wan model | downloads via Diffusers unless `WAN_MODEL_PATH` / `LOCAL_FILES_ONLY=1` is set |
 | CUDA/GPU | logged in `env_status.json`; warns if GPU is not H200 |
+
+## Path fallback and retry policy
+
+The scripts try hard to recover from common cluster issues, but they do not fake success.
+
+| Failure type | Automatic recovery |
+|---|---|
+| repo disk too small | choose a writable large path from `/root/autodl-tmp`, `/mnt/data`, `/data`, `$HOME`, `/tmp` |
+| Hugging Face / model cache path unwritable | move `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TRANSFORMERS_CACHE`, `DIFFUSERS_CACHE` to the selected runtime path |
+| pip cache path unwritable | move `PIP_CACHE_DIR` to the selected runtime path |
+| VBench / torch cache path unwritable | move `XDG_CACHE_HOME`, `TORCH_HOME`, `VBENCH_CACHE` to the selected runtime path |
+| default PyPI slow/fails | retry with Tsinghua PyPI mirror |
+| VBench PyPI fails | retry with GitHub source install |
+| spaCy model download fails | fallback to `spacy.blank("en") + rules`, recorded in output |
+| no GPU / no driver / too little disk | fail early with `preflight_status.json`; no fake table |
+
+To force a specific large disk:
+
+```bash
+export SBE_WORK_ROOT=/path/to/large/writable/disk
+bash scripts/run_all_h200.sh
+```
 
 ## Expected paper-facing interpretation
 

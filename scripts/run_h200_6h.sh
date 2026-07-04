@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "${VENV_DIR:-.venv}/bin/activate"
+source "$(dirname "$0")/resolve_runtime_paths.sh"
+source "$VENV_DIR/bin/activate"
 
 CONFIG="${CONFIG:-configs/h200_6h_online_continuous.yaml}"
 RUN_NAME="${RUN_NAME:-h200_online_continuous_6h_$(date +%Y%m%d_%H%M%S)}"
-OUT_DIR="${OUT_DIR:-outputs/$RUN_NAME}"
+OUT_DIR="${OUT_DIR:-$OUT_BASE_DIR/$RUN_NAME}"
 REQUIRE_OFFICIAL_VBENCH="${REQUIRE_OFFICIAL_VBENCH:-1}"
 
 # H200 has enough VRAM for the long-video setting. This allocator setting
