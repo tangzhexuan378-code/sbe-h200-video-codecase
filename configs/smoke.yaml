@@ -25,7 +25,7 @@ methods:
   - baseline_12step
   - teacache_12step_t0.2
   - fastercache_s2
-  - sbe_riskgate_v5
+  - sbe_online_continuous_full
 
 optional_methods:
   include_pab: false
@@ -47,10 +47,20 @@ sbe_riskgate_v5:
     object state: {action: nocache, steps: 12}
     counting: {action: nocache, steps: 12}
 
+sbe_online_continuous:
+  base_thresholds: [null, null, 0.18, 0.25, 0.32, 0.35, 0.35, 0.32, 0.25, 0.18, null, null]
+  r0: 0.60
+  scale: 3.00
+  eta: 0.35
+  alpha: 0.52
+  beta: 0.025
+  floor: 0.105
+  uncertainty_lambda: 0.50
+
 report:
   title: "Smoke Table"
   table_methods:
     - baseline_12step
     - teacache_12step_t0.2
     - fastercache_s2
-    - sbe_riskgate_v5
+    - sbe_online_continuous_full

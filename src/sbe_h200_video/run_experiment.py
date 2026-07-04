@@ -34,6 +34,7 @@ except Exception:
     apply_pyramid_attention_broadcast = None
 
 from .cases import select_cases
+from .spacy_online import continuous_threshold_schedule, discrete_threshold_schedule
 from .teacache import (
     disable_teacache,
     install_teacache_forward,
@@ -102,19 +103,31 @@ def load_pipe(cfg: dict[str, Any]) -> WanPipeline:
     return pipe
 
 
-def action_for_method(method: str, case: dict[str, str], cfg: dict[str, Any]) -> tuple[int, float | None]:
+def action_for_method(method: str, case: dict[str, str], cfg: dict[str, Any]) -> tuple[int, float | list[float | None] | None, dict[str, Any]]:
     steps = int(cfg["generation"]["steps"])
     if method == "baseline_12step":
-        return steps, None
+        return steps, None, {"scheduler": "baseline"}
     if method.startswith("teacache_12step_t"):
-        return steps, float(method.split("_t", 1)[1])
+        return steps, float(method.split("_t", 1)[1]), {"scheduler": "fixed_teacache"}
     if method == "uniform_teacache_t0.3":
-        return steps, 0.30
+        return steps, 0.30, {"scheduler": "uniform_teacache"}
+    if method == "sbe_online_continuous_full":
+        details = continuous_threshold_schedule(case["prompt"], steps, cfg["sbe_online_continuous"], use_uncertainty=True)
+        return steps, details["threshold_schedule"], details
+    if method == "sbe_online_continuous_no_u":
+        details = continuous_threshold_schedule(case["prompt"], steps, cfg["sbe_online_continuous"], use_uncertainty=False)
+        return steps, details["threshold_schedule"], details
+    if method == "sbe_online_discrete":
+        details = discrete_threshold_schedule(case["prompt"], steps, cfg["sbe_online_continuous"])
+        return steps, details["threshold_schedule"], details
     if method == "sbe_riskgate_v5":
         policy = cfg["sbe_riskgate_v5"]["policy"][case["block_type"]]
         if policy["action"] == "nocache":
-            return int(policy.get("steps", steps)), None
-        return int(policy.get("steps", steps)), float(policy["threshold"])
+            return int(policy.get("steps", steps)), None, {"scheduler": "legacy_type_policy", "legacy_block_type": case["block_type"]}
+        return int(policy.get("steps", steps)), float(policy["threshold"]), {
+            "scheduler": "legacy_type_policy",
+            "legacy_block_type": case["block_type"],
+        }
     raise ValueError(f"Unsupported TeaCache/SBE method: {method}")
 
 
@@ -126,7 +139,8 @@ def run_pipe(
     seed_idx: int,
     variant: str,
     steps: int,
-    threshold: float | None,
+    threshold: float | list[float | None] | None,
+    scheduler_details: dict[str, Any] | None,
     height: int,
     width: int,
     num_frames: int,
@@ -175,6 +189,17 @@ def run_pipe(
         "variant": variant,
         "steps": steps,
         "threshold": "" if threshold is None else threshold,
+        "threshold_schedule": "" if not isinstance(threshold, list) else json.dumps(threshold, ensure_ascii=False),
+        "online_risk": "" if not scheduler_details else scheduler_details.get("risk", ""),
+        "online_q": "" if not scheduler_details else scheduler_details.get("q", ""),
+        "online_uncertainty": ""
+        if not scheduler_details
+        else scheduler_details.get("parsed", {}).get("uncertainty", ""),
+        "online_features": "" if not scheduler_details else scheduler_details.get("features_json", ""),
+        "online_parser_source": ""
+        if not scheduler_details
+        else scheduler_details.get("parsed", {}).get("parser_source", ""),
+        "online_risk_level": "" if not scheduler_details else scheduler_details.get("risk_level", ""),
         "elapsed_seconds": round(elapsed, 4),
         "peak_memory_gb": round(peak_gb, 3),
         "prompt": case["prompt"],
@@ -346,6 +371,16 @@ def load_official_vbench_scores(path_text: str) -> dict[str, float]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     scores: dict[str, float] = {}
 
+    if isinstance(payload, dict) and isinstance(payload.get("scores"), dict):
+        for method, method_scores in payload["scores"].items():
+            if not isinstance(method_scores, dict):
+                continue
+            for key, value in method_scores.items():
+                if isinstance(value, (int, float)):
+                    scores[f"{method}/{key}"] = float(value)
+            if isinstance(method_scores.get("vbench4_avg"), (int, float)):
+                scores[method] = float(method_scores["vbench4_avg"])
+
     def walk(obj: Any, prefix: str = "") -> None:
         if isinstance(obj, dict):
             for key, value in obj.items():
@@ -368,10 +403,14 @@ def method_label(method: str) -> str:
     labels = {
         "baseline_12step": "Wan no-cache 12-step",
         "teacache_12step_t0.2": "TeaCache t=0.2",
+        "teacache_12step_t0.3": "TeaCache t=0.3",
         "teacache_12step_t0.45": "TeaCache t=0.45",
         "fastercache_s2": "FasterCache",
         "pab_s2_c3": "PAB",
         "sbe_riskgate_v5": "SBE-RiskGate v5",
+        "sbe_online_continuous_full": "SBE-online continuous full",
+        "sbe_online_continuous_no_u": "SBE-online continuous no-U",
+        "sbe_online_discrete": "SBE-online discrete",
         "uniform_teacache_t0.3": "Uniform TeaCache t=0.3",
     }
     return labels.get(method, method)
@@ -384,6 +423,8 @@ def method_vbench_score(method: str, group: pd.DataFrame, official_scores: dict[
         label,
         f"{method}/total_score",
         f"{label}/total_score",
+        f"{method}/vbench4_avg",
+        f"{label}/vbench4_avg",
         f"{method}/VBench",
         f"{label}/VBench",
     )
@@ -391,6 +432,26 @@ def method_vbench_score(method: str, group: pd.DataFrame, official_scores: dict[
         if key in official_scores:
             return round(float(official_scores[key]), 2)
     return round(float(group["VBench_proxy"].mean()), 2)
+
+
+def method_official_dim(method: str, label: str, official_scores: dict[str, float], key: str) -> str:
+    for candidate in (f"{method}/{key}", f"{label}/{key}"):
+        if candidate in official_scores:
+            return f"{float(official_scores[candidate]):.2f}"
+    return ""
+
+
+def method_flops_proxy(method: str, group: pd.DataFrame, latency: float, base_latency: float) -> float:
+    if method == "baseline_12step":
+        return 1.0
+    computed = pd.to_numeric(group.get("teacache_computed", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    skipped = pd.to_numeric(group.get("teacache_skipped", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    total = computed + skipped
+    if float(total.sum()) > 0:
+        # TeaCache skips transformer block passes. This estimates forward-count
+        # cost, not hardware profiler FLOPs.
+        return round(float((computed / total.clip(lower=1)).mean()), 4)
+    return round(float(latency / base_latency), 4)
 
 
 def build_summary(
@@ -407,18 +468,23 @@ def build_summary(
         if group.empty:
             continue
         latency = float(group["elapsed_seconds"].mean())
+        label = method_label(method)
         lpips_values = pd.to_numeric(group["LPIPS"], errors="coerce")
         lpips_mean = float(lpips_values.mean()) if lpips_values.notna().any() else float(group["LPIPS_L1_proxy"].mean())
         rows.append(
             {
-                "Method": method_label(method),
+                "Method": label,
                 "variant": method,
                 "n": int(len(group)),
-                "FLOPs_proxy_down": round(latency / base_latency, 4),
+                "FLOPs_proxy_down": method_flops_proxy(method, group, latency, base_latency),
                 "Speedup_up": round(base_latency / latency, 4),
                 "Latency_down": f"{latency:.4f}s",
                 "VBench_up": method_vbench_score(method, group, official_scores),
                 "VBench_source": vbench_source,
+                "VBench4_imaging_up": method_official_dim(method, label, official_scores, "imaging_quality"),
+                "VBench4_temporal_up": method_official_dim(method, label, official_scores, "temporal_flickering"),
+                "VBench4_motion_up": method_official_dim(method, label, official_scores, "motion_smoothness"),
+                "VBench4_dynamic_up": method_official_dim(method, label, official_scores, "dynamic_degree"),
                 "LPIPS_L1_down": round(float(group["LPIPS_L1_proxy"].mean()), 4),
                 "LPIPS_down": "" if math.isnan(lpips_mean) else round(lpips_mean, 4),
                 "SSIM_up": round(float(group["SSIM"].mean()), 4),
@@ -466,6 +532,10 @@ def write_report(summary: pd.DataFrame, out_dir: Path, cfg: dict[str, Any]) -> N
                 f"{float(row['Speedup_up']):.4f}",
                 str(row["Latency_down"]),
                 f"{float(row['VBench_up']):.2f}",
+                str(row.get("VBench4_imaging_up", "")),
+                str(row.get("VBench4_temporal_up", "")),
+                str(row.get("VBench4_motion_up", "")),
+                str(row.get("VBench4_dynamic_up", "")),
                 f"{float(row['LPIPS_L1_down']):.4f}",
                 f"{float(row['SSIM_up']):.4f}",
                 f"{float(row['PSNR_up']):.2f}",
@@ -475,8 +545,8 @@ def write_report(summary: pd.DataFrame, out_dir: Path, cfg: dict[str, Any]) -> N
         for _, row in summary.iterrows()
     )
     tex = rf"""\documentclass[11pt,a4paper]{{article}}
-\usepackage{{geometry,booktabs,adjustbox,graphicx}}
-\geometry{{margin=1.8cm}}
+\usepackage{{geometry,booktabs,adjustbox,graphicx,array}}
+\geometry{{margin=1.2cm,landscape}}
 \title{{{cfg['report'].get('title','H200 SBE Main Table')}}}
 \date{{\today}}
 \begin{{document}}
@@ -487,9 +557,9 @@ evaluation.official\_vbench\_json or OFFICIAL\_VBENCH\_JSON. Otherwise it is a
 clearly marked VBench proxy. Check main\_table.csv and eval\_status.json.
 \begin{{center}}
 \begin{{adjustbox}}{{max width=\textwidth}}
-\begin{{tabular}}{{lrrrrrrr}}
+\begin{{tabular}}{{lrrrrrrrrrrr}}
 \toprule
-Method & FLOPs proxy $\downarrow$ & Speedup $\uparrow$ & Latency $\downarrow$ & VBench $\uparrow$ & LPIPS-L1 $\downarrow$ & SSIM $\uparrow$ & PSNR $\uparrow$ \\
+Method & FLOPs $\downarrow$ & Speedup $\uparrow$ & Latency $\downarrow$ & VBench-4D $\uparrow$ & Imaging $\uparrow$ & Temporal $\uparrow$ & Motion $\uparrow$ & Dynamic $\uparrow$ & LPIPS-L1 $\downarrow$ & SSIM $\uparrow$ & PSNR $\uparrow$ \\
 \midrule
 {table_rows}
 \bottomrule
@@ -518,6 +588,7 @@ def run_teacache_and_sbe_methods(
         method
         for method in cfg["methods"]
         if method.startswith("teacache_") or method in {"baseline_12step", "sbe_riskgate_v5", "uniform_teacache_t0.3"}
+        or method.startswith("sbe_online_")
     ]
     if not methods:
         return []
@@ -532,8 +603,11 @@ def run_teacache_and_sbe_methods(
             if time.time() > deadline:
                 log("Time budget reached during TeaCache/SBE phase.")
                 break
-            steps, threshold = action_for_method(method, case, cfg)
-            log(f"Generate {case['case_id']} {method} steps={steps} threshold={threshold}")
+            steps, threshold, scheduler_details = action_for_method(method, case, cfg)
+            detail_text = ""
+            if scheduler_details and "risk" in scheduler_details:
+                detail_text = f" risk={scheduler_details.get('risk')} q={scheduler_details.get('q')}"
+            log(f"Generate {case['case_id']} {method} steps={steps} threshold={threshold}{detail_text}")
             rows.append(
                 run_pipe(
                     pipe,
@@ -544,6 +618,7 @@ def run_teacache_and_sbe_methods(
                     method,
                     steps,
                     threshold,
+                    scheduler_details,
                     int(gen["height"]),
                     int(gen["width"]),
                     int(gen["num_frames"]),
@@ -595,6 +670,7 @@ def run_builtin_methods(
                 method,
                 int(gen["steps"]),
                 None,
+                {"scheduler": "diffusers_builtin_hook"},
                 int(gen["height"]),
                 int(gen["width"]),
                 int(gen["num_frames"]),

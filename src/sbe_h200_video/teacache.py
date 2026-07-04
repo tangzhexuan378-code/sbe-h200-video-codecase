@@ -17,11 +17,18 @@ WAN21_T2V_13B_COEFFICIENTS = [
 ]
 
 
-def reset_teacache_state(transformer: torch.nn.Module, steps: int, threshold: float) -> None:
+def reset_teacache_state(transformer: torch.nn.Module, steps: int, threshold: float | list[float | None]) -> None:
+    if isinstance(threshold, list):
+        threshold_schedule = list(threshold)
+        default_threshold = 0.0
+    else:
+        threshold_schedule = None
+        default_threshold = float(threshold)
     transformer._sbe_teacache = {
         "enabled": True,
         "call_index": 0,
-        "threshold": float(threshold),
+        "threshold": default_threshold,
+        "threshold_schedule": threshold_schedule,
         "ret_calls": 2,
         "cutoff_calls": steps * 2 - 2,
         "coefficients": WAN21_T2V_13B_COEFFICIENTS,
@@ -50,6 +57,7 @@ def summarize_teacache(transformer: torch.nn.Module) -> dict[str, Any]:
         "teacache_skipped": skipped,
         "teacache_skip_rate": round(skipped / total, 4) if total else 0.0,
         "teacache_events": json.dumps(state["events"], ensure_ascii=False),
+        "teacache_threshold_schedule": json.dumps(state.get("threshold_schedule"), ensure_ascii=False),
     }
 
 
@@ -102,13 +110,20 @@ def install_teacache_forward(transformer: torch.nn.Module) -> None:
                 hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb)
         else:
             call_index = int(state["call_index"])
+            step_index = call_index // 2
             branch_name = "cond" if call_index % 2 == 0 else "uncond"
             branch = state["branches"][branch_name]
+            threshold_schedule = state.get("threshold_schedule")
+            if threshold_schedule is not None and step_index < len(threshold_schedule):
+                threshold_value = threshold_schedule[step_index]
+            else:
+                threshold_value = float(state["threshold"])
             must_compute = (
                 call_index < int(state["ret_calls"])
                 or call_index >= int(state["cutoff_calls"])
                 or branch["previous_modulated"] is None
                 or branch["previous_residual"] is None
+                or threshold_value is None
             )
             modulated = temb.detach()
             rel_l1 = None
@@ -119,7 +134,7 @@ def install_teacache_forward(transformer: torch.nn.Module) -> None:
                 rel_l1 = ((modulated.float() - prev.float()).abs().mean() / denom).detach().cpu().item()
                 rescaled = float(np.poly1d(state["coefficients"])(rel_l1))
                 branch["accumulated"] += rescaled
-                must_compute = branch["accumulated"] >= float(state["threshold"])
+                must_compute = branch["accumulated"] >= float(threshold_value)
 
             if must_compute:
                 original_hidden_states = hidden_states
@@ -138,9 +153,10 @@ def install_teacache_forward(transformer: torch.nn.Module) -> None:
             state["events"].append(
                 {
                     "call": call_index,
-                    "step": call_index // 2,
+                    "step": step_index,
                     "branch": branch_name,
                     "action": action,
+                    "threshold": None if threshold_value is None else round(float(threshold_value), 6),
                     "rel_l1": None if rel_l1 is None else round(float(rel_l1), 6),
                     "rescaled": None if rescaled is None else round(float(rescaled), 6),
                     "accumulated": round(float(branch["accumulated"]), 6),

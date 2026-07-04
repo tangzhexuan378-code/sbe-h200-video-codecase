@@ -1,113 +1,145 @@
 # SBE H200 Video Codecase
 
-This repository runs a real Wan2.1 text-to-video acceleration experiment for an H200 GPU. It is designed to produce a table with:
+This repository runs an H200-scale Wan2.1 text-to-video acceleration experiment for:
 
-`Method | FLOPs proxy | Speedup | Latency | VBench | LPIPS-L1 | SSIM | PSNR`
+**SBE-Online Continuous RiskGate**
+中文：**在线连续语义风险门控缓存调度**。
 
-The default H200 config uses `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`, `832x480`, `129` frames, `12` steps, and up to `80` heldout prompts under a 3 hour budget.
+The code assumes the H200 node is almost empty. It checks and installs the video generation stack, spaCy, ffmpeg support, and official VBench before running the experiment.
 
-## What It Tests
-
-- `Wan no-cache 12-step`: baseline.
-- `TeaCache t=0.2` and `TeaCache t=0.45`: public cache baselines.
-- `FasterCache`: Diffusers hook baseline.
-- `Uniform TeaCache t=0.3`: simple non-semantic cache policy.
-- `SBE-RiskGate v5`: the proposed semantic-risk pre-dispatch policy.
-
-SBE-RiskGate v5 does not do expensive online VLM checking. It dispatches before generation:
-
-- low-risk blocks such as attribute / containment / presence use TeaCache with type-specific thresholds;
-- high-risk blocks such as spatial relation / state change / counting use no-cache 12-step.
-
-## Setup
+## One-Command H200 Run
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/tangzhexuan378-code/sbe-h200-video-codecase.git
 cd sbe-h200-video-codecase
-bash scripts/setup.sh
+
+bash scripts/bootstrap_env.sh
+bash scripts/run_h200_4h.sh
 ```
 
-`scripts/setup.sh` installs Python dependencies, installs this package with `pip install -e .`, checks CUDA, checks `imageio-ffmpeg`, and tries to install official VBench. If the official VBench install fails, generation still works and the runner will clearly mark the VBench column as `proxy`.
-
-If the H200 server already has the Wan model downloaded:
+If the Wan model is already available locally:
 
 ```bash
 export WAN_MODEL_PATH=/path/to/Wan2.1-T2V-1.3B-Diffusers
 export LOCAL_FILES_ONLY=1
+bash scripts/run_h200_4h.sh
 ```
 
-If it does not, Diffusers will download `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` from Hugging Face, assuming network access and Hugging Face permission are available.
+## What The Main Method Does
 
-## Quick Smoke Test
+The main method does **online** prompt parsing. It does not use pre-labeled block types.
+
+```text
+prompt
+-> spaCy online parser
+-> semantic feature vector phi(B)
+-> uncertainty U(B)
+-> risk R(B)
+-> continuous risk intensity q(B)
+-> per-denoising-step cache threshold tau_t(B)
+-> video generation
+```
+
+Formulas:
+
+```math
+R(B)=w^\top \phi(B)+\lambda U(B)
+```
+
+```math
+q(B)=\mathrm{clip}\left(\frac{R(B)-r_0}{s}+\eta U(B),0,1\right)
+```
+
+```math
+\tau_t(B)=b_t(1-\alpha q(B))-\beta q(B)
+```
+
+Meaning:
+
+- `phi(B)` is extracted online from the prompt using spaCy tokens plus general rules.
+- `U(B)` is parsing uncertainty. Vague prompts, many entities, and multiple actions increase uncertainty.
+- `R(B)` is semantic risk.
+- `q(B)` maps risk to a continuous value in `[0, 1]`.
+- `tau_t(B)` is the cache threshold for denoising step `t`.
+- `None` in a threshold schedule means no-cache / full compute for that step.
+
+## Compared Methods
+
+The default H200 config runs:
+
+| Method | Purpose |
+|---|---|
+| `baseline_12step` | Wan no-cache 12-step baseline |
+| `teacache_12step_t0.2` | mild fixed TeaCache baseline |
+| `teacache_12step_t0.3` | medium fixed TeaCache baseline |
+| `teacache_12step_t0.45` | aggressive fixed TeaCache baseline |
+| `fastercache_s2` | Diffusers FasterCache baseline |
+| `pab_s2_c3` | PAB baseline, optional and capped by prompt count |
+| `sbe_online_discrete` | online parsing, but discrete low/medium/high ablation |
+| `sbe_online_continuous_no_u` | continuous threshold without uncertainty `U(B)` |
+| `sbe_online_continuous_full` | main method: continuous threshold with uncertainty |
+
+## Outputs
+
+After `bash scripts/run_h200_4h.sh`, outputs are written to:
+
+```text
+outputs/<run_name>/
+```
+
+Important files:
+
+| File | Meaning |
+|---|---|
+| `main_table.csv` | final paper-style table |
+| `main_table.md` | same table in Markdown |
+| `report.tex` | LaTeX report |
+| `report.pdf` | compiled PDF if `pdflatex` exists |
+| `generation_rows.csv` | raw generation rows, latency, memory, scheduler details |
+| `per_video_rows.csv` | per-video proxy metrics and sampled-frame metrics |
+| `official_vbench4_scores.json` | official VBench custom-input 4D scores |
+| `official_vbench4_scores.csv` | official VBench custom-input 4D scores as CSV |
+| `env_status.json` | CUDA / torch / spaCy / VBench / ffmpeg environment |
+| `videos/` | generated videos |
+| `frames/` | sampled frames for SSIM/PSNR/LPIPS-L1 proxy |
+
+## Metrics
+
+| Column | Chinese | Direction | Source |
+|---|---|---:|---|
+| `FLOPs_proxy_down` | FLOPs 近似计算量 | lower is better | proxy from TeaCache compute/skip events; not Nsight |
+| `Speedup_up` | 加速比 | higher is better | measured wall-clock latency ratio |
+| `Latency_down` | 延迟 | lower is better | real wall-clock timing |
+| `VBench_up` | 官方 VBench 4维均分 | higher is better | official `vbench evaluate`, custom-input |
+| `VBench4_imaging_up` | 成像质量 | higher is better | official VBench |
+| `VBench4_temporal_up` | 时序稳定 | higher is better | official VBench temporal flickering |
+| `VBench4_motion_up` | 运动平滑 | higher is better | official VBench |
+| `VBench4_dynamic_up` | 动态程度 | higher is better | official VBench |
+| `LPIPS_L1_down` | 感知差异近似 | lower is better | sampled-frame L1 proxy |
+| `SSIM_up` | 结构相似度 | higher is better | computed from sampled frames |
+| `PSNR_up` | 峰值信噪比 | higher is better | computed from sampled frames |
+
+Important honesty note:
+
+- Official VBench 4D is real official VBench custom-input evaluation.
+- FLOPs is a proxy unless you additionally run Nsight / torch profiler.
+- Full 16D VBench is not claimed by this code path.
+
+## Smoke Test
+
+For a quick sanity check:
 
 ```bash
+bash scripts/bootstrap_env.sh
 bash scripts/run_smoke.sh
 ```
 
-This generates a tiny `320x192`, `33` frame run to verify the environment.
+The smoke test uses smaller videos and fewer prompts. It is only for environment validation.
 
-## Main H200 Run
+## If Something Fails
 
-```bash
-bash scripts/run_h200_3h.sh
-```
+The scripts intentionally fail rather than invent scores.
 
-Outputs are written to `outputs/<run_name>/`:
-
-- `main_table.csv`
-- `main_table.md`
-- `per_video_rows.csv`
-- `generation_rows.csv`
-- `eval_status.json`
-- `contact_sheet_middle.jpg`
-- `report.tex`
-- `report.pdf` if `pdflatex` is installed
-
-## VBench Modes
-
-The code distinguishes official VBench from a proxy score.
-
-Default mode:
-
-```bash
-bash scripts/run_h200_3h.sh
-```
-
-This allows proxy VBench if official VBench results are not supplied. `eval_status.json` will say:
-
-```json
-{"vbench_source": "proxy"}
-```
-
-Strict mode:
-
-```bash
-export REQUIRE_OFFICIAL_VBENCH=1
-export OFFICIAL_VBENCH_JSON=/path/to/official_vbench_result.json
-bash scripts/run_h200_3h.sh
-```
-
-Strict mode refuses to run the final table without an official VBench JSON. This avoids accidentally reporting a proxy as official VBench.
-
-After a normal generation run, you can also try official VBench custom-input evaluation:
-
-```bash
-bash scripts/run_official_vbench_custom.sh outputs/<run_name>
-```
-
-This script organizes generated videos by method and calls the official `vbench evaluate --mode=custom_input` command for the custom-input dimensions supported by VBench: subject consistency, background consistency, motion smoothness, dynamic degree, aesthetic quality, and imaging quality.
-
-If VBench produces a JSON summary, rebuild the final table with:
-
-```bash
-python -m sbe_h200_video.rebuild_report \
-  --config configs/h200_3h.yaml \
-  --out-dir outputs/<run_name> \
-  --official-vbench-json /path/to/vbench_result.json
-```
-
-## Why This Uses H200 Better Than a Small Local GPU
-
-The main config intentionally uses longer and larger videos: `129` frames at `832x480`, multiple methods, and a balanced heldout prompt set. This makes memory bandwidth and VRAM matter, while keeping the wall-clock budget around three hours.
-
-On a small local GPU, use `configs/smoke.yaml` or reduce `max_prompts`, `num_frames`, `width`, and `height`.
+- If VBench cannot be installed, `run_h200_4h.sh` stops by default.
+- If spaCy model download fails, the parser falls back to `spacy.blank("en") + rules`, and this is recorded in `env_status.json` and `generation_rows.csv`.
+- If the Wan model cannot be downloaded, set `WAN_MODEL_PATH` to a local model directory or configure the server network / Hugging Face mirror.
