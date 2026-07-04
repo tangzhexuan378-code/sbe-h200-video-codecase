@@ -103,6 +103,12 @@ def load_pipe(cfg: dict[str, Any]) -> WanPipeline:
     return pipe
 
 
+def sbe_variant_cfg(cfg: dict[str, Any], variant_name: str) -> dict[str, Any]:
+    merged = dict(cfg["sbe_online_continuous"])
+    merged.update(cfg.get("sbe_online_variants", {}).get(variant_name, {}))
+    return merged
+
+
 def action_for_method(method: str, case: dict[str, str], cfg: dict[str, Any]) -> tuple[int, float | list[float | None] | None, dict[str, Any]]:
     steps = int(cfg["generation"]["steps"])
     if method == "baseline_12step":
@@ -112,13 +118,28 @@ def action_for_method(method: str, case: dict[str, str], cfg: dict[str, Any]) ->
     if method == "uniform_teacache_t0.3":
         return steps, 0.30, {"scheduler": "uniform_teacache"}
     if method == "sbe_online_continuous_full":
-        details = continuous_threshold_schedule(case["prompt"], steps, cfg["sbe_online_continuous"], use_uncertainty=True)
+        details = continuous_threshold_schedule(case["prompt"], steps, sbe_variant_cfg(cfg, "full"), use_uncertainty=True)
         return steps, details["threshold_schedule"], details
     if method == "sbe_online_continuous_no_u":
-        details = continuous_threshold_schedule(case["prompt"], steps, cfg["sbe_online_continuous"], use_uncertainty=False)
+        details = continuous_threshold_schedule(case["prompt"], steps, sbe_variant_cfg(cfg, "no_u"), use_uncertainty=False)
+        return steps, details["threshold_schedule"], details
+    if method == "sbe_online_continuous_rule_only":
+        details = continuous_threshold_schedule(
+            case["prompt"],
+            steps,
+            sbe_variant_cfg(cfg, "rule_only"),
+            use_uncertainty=True,
+            force_rule_only=True,
+        )
+        return steps, details["threshold_schedule"], details
+    if method == "sbe_online_continuous_fast":
+        details = continuous_threshold_schedule(case["prompt"], steps, sbe_variant_cfg(cfg, "fast"), use_uncertainty=True)
+        return steps, details["threshold_schedule"], details
+    if method == "sbe_online_continuous_quality":
+        details = continuous_threshold_schedule(case["prompt"], steps, sbe_variant_cfg(cfg, "quality"), use_uncertainty=True)
         return steps, details["threshold_schedule"], details
     if method == "sbe_online_discrete":
-        details = discrete_threshold_schedule(case["prompt"], steps, cfg["sbe_online_continuous"])
+        details = discrete_threshold_schedule(case["prompt"], steps, sbe_variant_cfg(cfg, "discrete"))
         return steps, details["threshold_schedule"], details
     if method == "sbe_riskgate_v5":
         policy = cfg["sbe_riskgate_v5"]["policy"][case["block_type"]]
@@ -410,6 +431,9 @@ def method_label(method: str) -> str:
         "sbe_riskgate_v5": "SBE-RiskGate v5",
         "sbe_online_continuous_full": "SBE-online continuous full",
         "sbe_online_continuous_no_u": "SBE-online continuous no-U",
+        "sbe_online_continuous_rule_only": "SBE-online rule-only",
+        "sbe_online_continuous_fast": "SBE-online continuous fast",
+        "sbe_online_continuous_quality": "SBE-online continuous quality",
         "sbe_online_discrete": "SBE-online discrete",
         "uniform_teacache_t0.3": "Uniform TeaCache t=0.3",
     }

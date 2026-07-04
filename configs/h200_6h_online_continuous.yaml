@@ -1,0 +1,115 @@
+experiment:
+  name: h200_online_continuous_6h
+  seed_idx: 23
+  split: heldout
+  max_prompts: 60
+  time_budget_hours: 5.5
+  save_videos: true
+  save_sample_frames: true
+  sample_frame_count: 9
+
+model:
+  model_id: Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+  local_files_only: false
+  torch_dtype: bfloat16
+
+generation:
+  height: 480
+  width: 832
+  num_frames: 129
+  fps: 8
+  steps: 12
+  guidance_scale: 6.0
+
+methods:
+  - baseline_12step
+  - teacache_12step_t0.2
+  - teacache_12step_t0.3
+  - teacache_12step_t0.45
+  - fastercache_s2
+  - sbe_online_discrete
+  - sbe_online_continuous_no_u
+  - sbe_online_continuous_rule_only
+  - sbe_online_continuous_quality
+  - sbe_online_continuous_fast
+  - sbe_online_continuous_full
+
+optional_methods:
+  include_pab: true
+  pab_max_prompts: 30
+
+evaluation:
+  try_official_vbench: true
+  try_lpips: true
+  compute_ssim_psnr: true
+  official_vbench_json: ""
+
+sbe_online_continuous:
+  base_thresholds: [null, null, 0.18, 0.25, 0.32, 0.35, 0.35, 0.32, 0.25, 0.18, null, null]
+  r0: 0.60
+  scale: 3.00
+  eta: 0.35
+  alpha: 0.52
+  beta: 0.025
+  floor: 0.105
+  uncertainty_lambda: 0.50
+  weights:
+    attribute: 0.20
+    presence: 0.40
+    containment: 0.50
+    spatial: 1.00
+    state_change: 1.00
+    counting: 1.20
+    contact: 1.10
+    transfer: 1.10
+    motion: 0.50
+    unknown: 1.50
+  discrete_low: 1.00
+  discrete_high: 2.40
+  discrete_low_schedule: [null, 0.20, 0.30, 0.35, 0.40, 0.40, 0.40, 0.35, 0.30, 0.20, null, null]
+  discrete_medium_schedule: [null, null, 0.15, 0.20, 0.25, 0.25, 0.25, 0.20, 0.15, null, null, null]
+  discrete_high_schedule: [null, null, null, 0.15, 0.20, 0.20, 0.20, 0.15, null, null, null, null]
+
+sbe_online_variants:
+  full: {}
+  no_u: {}
+  rule_only: {}
+  discrete: {}
+  # Speed-first variant: slightly higher base windows and weaker risk compression.
+  fast:
+    base_thresholds: [null, 0.16, 0.24, 0.32, 0.40, 0.43, 0.43, 0.40, 0.32, 0.24, 0.16, null]
+    alpha: 0.46
+    beta: 0.018
+    floor: 0.095
+  # Quality-first variant: more conservative around high-risk prompts.
+  quality:
+    base_thresholds: [null, null, 0.16, 0.22, 0.28, 0.31, 0.31, 0.28, 0.22, 0.16, null, null]
+    alpha: 0.58
+    beta: 0.030
+    floor: 0.115
+
+sbe_riskgate_v5:
+  preserve_original_prompt: true
+  policy:
+    object attribute: {action: teacache, threshold: 0.45, steps: 12}
+    containment: {action: teacache, threshold: 0.20, steps: 12}
+    object presence: {action: teacache, threshold: 0.30, steps: 12}
+    spatial relation: {action: nocache, steps: 12}
+    object state: {action: nocache, steps: 12}
+    counting: {action: nocache, steps: 12}
+
+report:
+  title: "H200 5-6h SBE Online Continuous RiskGate Main Table"
+  table_methods:
+    - baseline_12step
+    - teacache_12step_t0.2
+    - teacache_12step_t0.3
+    - teacache_12step_t0.45
+    - fastercache_s2
+    - pab_s2_c3
+    - sbe_online_discrete
+    - sbe_online_continuous_no_u
+    - sbe_online_continuous_rule_only
+    - sbe_online_continuous_quality
+    - sbe_online_continuous_fast
+    - sbe_online_continuous_full

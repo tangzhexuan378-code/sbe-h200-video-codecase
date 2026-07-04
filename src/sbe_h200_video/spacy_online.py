@@ -227,7 +227,9 @@ def load_spacy_model() -> tuple[Any, str]:
         return nlp, "spacy_blank_rule_fallback"
 
 
-def _tokens(prompt: str) -> tuple[list[str], str]:
+def _tokens(prompt: str, *, force_rule_only: bool = False) -> tuple[list[str], str]:
+    if force_rule_only:
+        return re.findall(r"[A-Za-z0-9']+", prompt.lower()), "rule_only_no_spacy"
     nlp, source = load_spacy_model()
     if nlp is None:
         return re.findall(r"[A-Za-z0-9']+", prompt.lower()), source
@@ -241,8 +243,8 @@ def _tokens(prompt: str) -> tuple[list[str], str]:
     return words, source
 
 
-def extract_features(prompt: str) -> dict[str, Any]:
-    words, parser_source = _tokens(prompt)
+def extract_features(prompt: str, *, force_rule_only: bool = False) -> dict[str, Any]:
+    words, parser_source = _tokens(prompt, force_rule_only=force_rule_only)
     text = " ".join(words)
     raw = prompt.lower()
 
@@ -313,8 +315,9 @@ def continuous_threshold_schedule(
     cfg: dict[str, Any],
     *,
     use_uncertainty: bool = True,
+    force_rule_only: bool = False,
 ) -> dict[str, Any]:
-    parsed = extract_features(prompt)
+    parsed = extract_features(prompt, force_rule_only=force_rule_only)
     uncertainty = float(parsed["uncertainty"]) if use_uncertainty else 0.0
     parsed_for_risk = dict(parsed)
     parsed_for_risk["uncertainty"] = uncertainty
@@ -352,8 +355,8 @@ def continuous_threshold_schedule(
     }
 
 
-def discrete_threshold_schedule(prompt: str, steps: int, cfg: dict[str, Any]) -> dict[str, Any]:
-    result = continuous_threshold_schedule(prompt, steps, cfg, use_uncertainty=True)
+def discrete_threshold_schedule(prompt: str, steps: int, cfg: dict[str, Any], *, force_rule_only: bool = False) -> dict[str, Any]:
+    result = continuous_threshold_schedule(prompt, steps, cfg, use_uncertainty=True, force_rule_only=force_rule_only)
     risk = float(result["risk"])
     low = float(cfg.get("discrete_low", 1.0))
     high = float(cfg.get("discrete_high", 2.4))

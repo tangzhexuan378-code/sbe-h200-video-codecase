@@ -37,6 +37,9 @@ methods = [
     "pab_s2_c3",
     "sbe_online_discrete",
     "sbe_online_continuous_no_u",
+    "sbe_online_continuous_rule_only",
+    "sbe_online_continuous_quality",
+    "sbe_online_continuous_fast",
     "sbe_online_continuous_full",
 ]
 for method in methods:

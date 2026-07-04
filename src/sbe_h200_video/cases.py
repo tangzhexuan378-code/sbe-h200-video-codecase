@@ -183,9 +183,16 @@ def build_cases() -> list[VideoCase]:
 def select_cases(split: str, max_prompts: int) -> list[dict[str, str]]:
     cases = [c for c in build_cases() if split == "all" or c.split == split]
     # Balanced round-robin by block type.
+    buckets = {block_type: [c for c in cases if c.block_type == block_type] for block_type in BLOCKS}
     selected: list[VideoCase] = []
-    for block_type in BLOCKS:
-        selected.extend([c for c in cases if c.block_type == block_type])
+    max_bucket = max((len(items) for items in buckets.values()), default=0)
+    for idx in range(max_bucket):
+        for block_type in BLOCKS:
+            items = buckets[block_type]
+            if idx < len(items):
+                selected.append(items[idx])
+                if len(selected) >= max_prompts:
+                    return [c.to_dict() for c in selected]
     return [c.to_dict() for c in selected[:max_prompts]]
 
 
